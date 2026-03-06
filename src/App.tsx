@@ -102,6 +102,7 @@ export default function App() {
     amount: 0,
     dueDate: new Date().toISOString().split('T')[0],
     isSubscription: false,
+    recurrence: 'none',
     status: 'pendente'
   });
 
@@ -203,11 +204,25 @@ export default function App() {
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    
+    // Ensure status is correctly set based on dueDate if it's not 'pago'
+    const today = new Date().toISOString().split('T')[0];
+    const finalStatus = formData.status === 'pago' 
+      ? 'pago' 
+      : (formData.dueDate && formData.dueDate < today ? 'atrasado' : 'pendente');
+
+    const finalData = {
+      ...formData,
+      status: finalStatus,
+      // Ensure recurrence is 'none' if not a subscription
+      recurrence: formData.isSubscription ? (formData.recurrence || 'mensal') : 'none'
+    };
+
     if (editingExpense) {
-      setExpenses(prev => prev.map(exp => exp.id === editingExpense.id ? { ...exp, ...formData } as Expense : exp));
+      setExpenses(prev => prev.map(exp => exp.id === editingExpense.id ? { ...exp, ...finalData } as Expense : exp));
     } else {
       const newExpense: Expense = {
-        ...formData,
+        ...finalData,
         id: Math.random().toString(36).substr(2, 9),
       } as Expense;
       setExpenses(prev => [...prev, newExpense]);
@@ -1275,7 +1290,14 @@ export default function App() {
                       id="isSubscription"
                       className="w-4 h-4 md:w-5 md:h-5 rounded border-indigo-300 text-indigo-600 focus:ring-indigo-500"
                       checked={formData.isSubscription}
-                      onChange={e => setFormData({...formData, isSubscription: e.target.checked})}
+                      onChange={e => {
+                        const isSub = e.target.checked;
+                        setFormData({
+                          ...formData, 
+                          isSubscription: isSub,
+                          recurrence: isSub ? (formData.recurrence === 'none' ? 'mensal' : formData.recurrence) : 'none'
+                        });
+                      }}
                     />
                     <label htmlFor="isSubscription" className="text-xs md:text-sm font-medium text-indigo-900 cursor-pointer">
                       Esta é uma assinatura mensal recorrente
