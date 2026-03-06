@@ -1,5 +1,7 @@
 export type PaymentStatus = 'pago' | 'pendente' | 'atrasado';
 
+export type RecurrenceFrequency = 'none' | 'diario' | 'semanal' | 'mensal' | 'anual';
+
 export interface PaymentHistory {
   id: string;
   expenseId: string;
@@ -21,6 +23,7 @@ export interface Expense {
   lastPaymentDate?: string;
   status: PaymentStatus;
   isSubscription: boolean;
+  recurrence?: RecurrenceFrequency;
   notes?: string;
 }
 
@@ -35,6 +38,7 @@ export const INITIAL_EXPENSES: Expense[] = [
     dueDate: '2026-03-15',
     status: 'pendente',
     isSubscription: true,
+    recurrence: 'mensal',
   },
   {
     id: '2',
@@ -46,6 +50,7 @@ export const INITIAL_EXPENSES: Expense[] = [
     dueDate: '2026-03-20',
     status: 'pendente',
     isSubscription: false,
+    recurrence: 'mensal',
   },
   {
     id: '3',
@@ -54,8 +59,8 @@ export const INITIAL_EXPENSES: Expense[] = [
     description: 'Consumo de Energia Elétrica - Sede',
     items: 'Consumo Mensal',
     amount: 850750.25,
-    dueDate: '2026-03-10',
-    status: 'pendente',
+    dueDate: '2026-03-01',
+    status: 'atrasado',
     isSubscription: false,
   },
   {
@@ -66,7 +71,7 @@ export const INITIAL_EXPENSES: Expense[] = [
     items: 'Detergentes, Desinfetantes, Papel Higiénico',
     amount: 150000.00,
     dueDate: '2026-03-05',
-    status: 'pendente',
+    status: 'atrasado',
     isSubscription: false,
   },
   {
@@ -76,18 +81,7 @@ export const INITIAL_EXPENSES: Expense[] = [
     description: 'Compras para a copa e recepção',
     items: 'Café, Açúcar, Água Mineral, Bolachas',
     amount: 320500.00,
-    dueDate: '2026-03-05',
-    status: 'pendente',
-    isSubscription: false,
-  },
-  {
-    id: '6',
-    category: 'Matéria Prima',
-    company: 'Casa de Papel',
-    description: 'Aquisição de insumos para escritório',
-    items: 'Papel A4, Toners, Canetas',
-    amount: 2450000.00,
-    dueDate: '2026-03-25',
+    dueDate: '2026-03-08',
     status: 'pendente',
     isSubscription: false,
   },

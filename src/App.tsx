@@ -16,7 +16,8 @@ import {
   TrendingUp,
   DollarSign,
   PieChart,
-  FileSpreadsheet
+  FileSpreadsheet,
+  Wallet
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import jsPDF from 'jspdf';
@@ -24,6 +25,62 @@ import autoTable from 'jspdf-autotable';
 import ExcelJS from 'exceljs';
 import { saveAs } from 'file-saver';
 import { Expense, INITIAL_EXPENSES, PaymentStatus, PaymentHistory } from './types';
+
+const Logo = ({ className = "" }: { className?: string }) => (
+  <svg viewBox="0 0 320 100" className={className} xmlns="http://www.w3.org/2000/svg">
+    <text x="10" y="60" fontFamily="system-ui, -apple-system, sans-serif" fontWeight="800" fontSize="52" fill="#112F24" letterSpacing="-2">ilun</text>
+    <text x="122" y="60" fontFamily="system-ui, -apple-system, sans-serif" fontWeight="800" fontSize="52" fill="#7D00A3" letterSpacing="-2">g</text>
+    <rect x="152" y="22" width="16" height="16" fill="#B38600" rx="1" />
+    <text x="172" y="60" fontFamily="system-ui, -apple-system, sans-serif" fontWeight="800" fontSize="52" fill="#112F24" letterSpacing="-2">i</text>
+    <text x="12" y="85" fontFamily="system-ui, -apple-system, sans-serif" fontSize="15" fontWeight="400" fill="#112F24" letterSpacing="0.2">Caminhos para o Desenvolvimento</text>
+  </svg>
+);
+
+const getLogoPngDataUrl = (): Promise<string> => {
+  return new Promise((resolve) => {
+    const svg = `<svg width="320" height="100" viewBox="0 0 320 100" xmlns="http://www.w3.org/2000/svg">
+      <rect width="320" height="100" fill="white" />
+      <text x="10" y="60" font-family="Arial, sans-serif" font-weight="800" font-size="52" fill="#112F24" letter-spacing="-2">ilun</text>
+      <text x="122" y="60" font-family="Arial, sans-serif" font-weight="800" font-size="52" fill="#7D00A3" letter-spacing="-2">g</text>
+      <rect x="152" y="22" width="16" height="16" fill="#B38600" rx="1" />
+      <text x="172" y="60" font-family="Arial, sans-serif" font-weight="800" font-size="52" fill="#112F24" letter-spacing="-2">i</text>
+      <text x="12" y="85" font-family="Arial, sans-serif" font-size="15" font-weight="400" fill="#112F24" letter-spacing="0.2">Caminhos para o Desenvolvimento</text>
+    </svg>`;
+    const canvas = document.createElement('canvas');
+    canvas.width = 320;
+    canvas.height = 100;
+    const ctx = canvas.getContext('2d');
+    const img = new Image();
+    img.onload = () => {
+      ctx?.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL('image/png'));
+    };
+    img.src = 'data:image/svg+xml;base64,' + btoa(unescape(encodeURIComponent(svg)));
+  });
+};
+
+const calculateNextDueDate = (currentDate: string, frequency: any): string => {
+  const date = new Date(currentDate);
+  if (isNaN(date.getTime())) return currentDate;
+  
+  switch (frequency) {
+    case 'diario':
+      date.setDate(date.getDate() + 1);
+      break;
+    case 'semanal':
+      date.setDate(date.getDate() + 7);
+      break;
+    case 'mensal':
+      date.setMonth(date.getMonth() + 1);
+      break;
+    case 'anual':
+      date.setFullYear(date.getFullYear() + 1);
+      break;
+    default:
+      return currentDate;
+  }
+  return date.toISOString().split('T')[0];
+};
 
 export default function App() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
@@ -55,12 +112,36 @@ export default function App() {
     let initialData = saved ? JSON.parse(saved) : INITIAL_EXPENSES;
     if (savedHistory) setHistory(JSON.parse(savedHistory));
     
-    // Auto-calculate overdue status
+    // Auto-update statuses based on current date
     const today = new Date().toISOString().split('T')[0];
+    const currentMonth = today.substring(0, 7); // YYYY-MM
+
     initialData = initialData.map((exp: Expense) => {
-      if (exp.status !== 'pago' && exp.dueDate < today) {
-        return { ...exp, status: 'atrasado' };
+      // If it's not paid, check if it's overdue or pending
+      if (exp.status !== 'pago') {
+        const isOverdue = exp.dueDate < today;
+        return {
+          ...exp,
+          status: isOverdue ? 'atrasado' : 'pendente'
+        };
       }
+      
+      // If it's a recurring expense and the month has changed since its last payment/due date,
+      // we should ensure it resets to pending for the new month if it hasn't already.
+      // This handles the "muda automaticamente para pendente" requirement.
+      if (exp.recurrence && exp.recurrence !== 'none') {
+        const expMonth = exp.dueDate.substring(0, 7);
+        if (expMonth < currentMonth) {
+          // The paid item is from a previous month, move it to the current/next period
+          const nextDueDate = calculateNextDueDate(exp.dueDate, exp.recurrence);
+          return {
+            ...exp,
+            status: 'pendente',
+            dueDate: nextDueDate
+          };
+        }
+      }
+      
       return exp;
     });
     
@@ -90,6 +171,7 @@ export default function App() {
         amount: 0,
         dueDate: new Date().toISOString().split('T')[0],
         isSubscription: false,
+        recurrence: 'none',
         status: 'pendente'
       });
       setAmountInput('');
@@ -134,13 +216,22 @@ export default function App() {
   };
 
   const toggleStatus = (id: string) => {
-    setExpenses(prev => prev.map(exp => {
-      if (exp.id === id) {
+    setExpenses(prev => {
+      const updatedExpenses = [...prev];
+      const expenseIndex = updatedExpenses.findIndex(exp => exp.id === id);
+      
+      if (expenseIndex !== -1) {
+        const exp = updatedExpenses[expenseIndex];
         let newStatus: PaymentStatus;
         const today = new Date().toISOString().split('T')[0];
         
         if (exp.status === 'pago') {
           newStatus = exp.dueDate < today ? 'atrasado' : 'pendente';
+          updatedExpenses[expenseIndex] = { 
+            ...exp, 
+            status: newStatus,
+            lastPaymentDate: undefined
+          };
         } else {
           newStatus = 'pago';
           // Add to history
@@ -153,17 +244,28 @@ export default function App() {
             dueDate: exp.dueDate,
             category: exp.category
           };
-          setHistory(prev => [historyEntry, ...prev]);
-        }
+          setHistory(prevHistory => [historyEntry, ...prevHistory]);
 
-        return { 
-          ...exp, 
-          status: newStatus,
-          lastPaymentDate: newStatus === 'pago' ? today : exp.lastPaymentDate
-        };
+          // Handle Recurrence
+          if (exp.recurrence && exp.recurrence !== 'none') {
+            const nextDueDate = calculateNextDueDate(exp.dueDate, exp.recurrence);
+            updatedExpenses[expenseIndex] = {
+              ...exp,
+              status: 'pendente',
+              dueDate: nextDueDate,
+              lastPaymentDate: today
+            };
+          } else {
+            updatedExpenses[expenseIndex] = { 
+              ...exp, 
+              status: newStatus,
+              lastPaymentDate: today
+            };
+          }
+        }
       }
-      return exp;
-    }));
+      return updatedExpenses;
+    });
   };
 
   const formatCurrency = (value: number) => {
@@ -242,10 +344,18 @@ export default function App() {
     }
   };
 
-  const exportToPDF = (e?: React.MouseEvent) => {
+  const exportToPDF = async (e?: React.MouseEvent) => {
     if (e) e.preventDefault();
     const doc = new jsPDF();
     
+    // Add Logo
+    try {
+      const logoPng = await getLogoPngDataUrl();
+      doc.addImage(logoPng, 'PNG', 160, 10, 35, 12);
+    } catch (e) {
+      console.error('Erro ao carregar logo no PDF', e);
+    }
+
     // Header
     doc.setFontSize(20);
     doc.setTextColor(40);
@@ -370,6 +480,24 @@ export default function App() {
     
     // --- MAIN SHEET ---
     const worksheet = workbook.addWorksheet('Gestão de Despesas');
+
+    // Add Logo to Excel
+    try {
+      const logoPng = await getLogoPngDataUrl();
+      const base64 = logoPng.split(',')[1];
+      
+      const logoId = workbook.addImage({
+        base64: base64,
+        extension: 'png',
+      });
+      
+      worksheet.addImage(logoId, {
+        tl: { col: 6, row: 0.5 },
+        ext: { width: 120, height: 40 }
+      });
+    } catch (e) {
+      console.error('Erro ao adicionar logo ao Excel', e);
+    }
 
     // Add Title
     worksheet.mergeCells('A1:H1');
@@ -641,23 +769,13 @@ export default function App() {
       <header className="bg-white border-b border-slate-200 pt-4 pb-6 px-4 md:px-6 sticky top-0 z-10 shadow-sm">
         <div className="max-w-7xl mx-auto">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <motion.div 
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="flex items-center gap-2 text-indigo-600 font-semibold text-[10px] tracking-wider uppercase mb-0.5"
-              >
-                <TrendingUp size={12} />
-                <span>Controle Financeiro 2026</span>
-              </motion.div>
-              <motion.h1 
-                initial={{ opacity: 0, y: -10 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 }}
-                className="text-xl md:text-2xl font-bold text-slate-900 tracking-tight"
-              >
-                Gestor de Gastos Mensais
-              </motion.h1>
+            <div className="flex items-center gap-4">
+              <Logo className="h-12 w-auto" />
+              <div className="hidden md:block h-10 w-px bg-slate-200" />
+              <div className="hidden md:block">
+                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Painel Financeiro</p>
+                <p className="text-sm font-semibold text-slate-600">Gestão de Contas a Pagar</p>
+              </div>
             </div>
             
             <div className="flex items-center gap-2">
@@ -719,29 +837,95 @@ export default function App() {
           </div>
 
           {/* Stats Grid */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4 mt-4">
-            {[
-              { label: 'Total', value: stats.total, icon: PieChart, color: 'text-slate-600', bg: 'bg-slate-50' },
-              { label: 'Pagas', value: stats.paid, icon: CheckCircle2, color: 'text-emerald-600', bg: 'bg-emerald-50' },
-              { label: 'Pendentes', value: stats.pending, icon: Clock, color: 'text-amber-600', bg: 'bg-amber-50' },
-              { label: 'Atrasadas', value: stats.overdue, icon: AlertCircle, color: 'text-rose-600', bg: 'bg-rose-50' },
-            ].map((stat, i) => (
-              <motion.div 
-                key={stat.label}
-                initial={{ opacity: 0, scale: 0.95 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ delay: 0.3 + (i * 0.1) }}
-                className={`${stat.bg} p-2.5 md:p-3 rounded-xl border border-white/50 flex items-center gap-3`}
-              >
-                <div className={`p-1.5 rounded-lg bg-white shadow-sm ${stat.color}`}>
-                  <stat.icon size={14} />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 md:gap-4 mt-6">
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3"
+            >
+              <div className="flex items-center justify-between">
+                <div className="w-8 h-8 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600">
+                  <Wallet size={16} />
                 </div>
-                <div>
-                  <p className="text-[9px] font-medium text-slate-500 uppercase tracking-wider">{stat.label}</p>
-                  <p className={`text-sm md:text-base font-bold ${stat.color}`}>{stat.value}</p>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Total</span>
+              </div>
+              <div>
+                <p className="text-lg font-black text-slate-900 truncate">{formatCurrency(stats.totalAmount)}</p>
+                <p className="text-[10px] text-slate-400 mt-0.5">{stats.total} contas registradas</p>
+              </div>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.1 }}
+              className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3"
+            >
+              <div className="flex items-center justify-between">
+                <div className="w-8 h-8 rounded-lg bg-emerald-50 flex items-center justify-center text-emerald-600">
+                  <CheckCircle2 size={16} />
                 </div>
-              </motion.div>
-            ))}
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pagas</span>
+              </div>
+              <div>
+                <p className="text-lg font-black text-slate-900">{stats.paid}</p>
+                <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(stats.paid / (stats.total || 1)) * 100}%` }}
+                    className="h-full bg-emerald-500"
+                  />
+                </div>
+              </div>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.2 }}
+              className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3"
+            >
+              <div className="flex items-center justify-between">
+                <div className="w-8 h-8 rounded-lg bg-amber-50 flex items-center justify-center text-amber-600">
+                  <Clock size={16} />
+                </div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Pendentes</span>
+              </div>
+              <div>
+                <p className="text-lg font-black text-slate-900">{stats.pending}</p>
+                <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(stats.pending / (stats.total || 1)) * 100}%` }}
+                    className="h-full bg-amber-500"
+                  />
+                </div>
+              </div>
+            </motion.div>
+
+            <motion.div 
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+              className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm flex flex-col gap-3"
+            >
+              <div className="flex items-center justify-between">
+                <div className="w-8 h-8 rounded-lg bg-rose-50 flex items-center justify-center text-rose-600">
+                  <AlertCircle size={16} />
+                </div>
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Atrasadas</span>
+              </div>
+              <div>
+                <p className="text-lg font-black text-slate-900">{stats.overdue}</p>
+                <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(stats.overdue / (stats.total || 1)) * 100}%` }}
+                    className="h-full bg-rose-500"
+                  />
+                </div>
+              </div>
+            </motion.div>
           </div>
         </div>
       </header>
@@ -811,7 +995,15 @@ export default function App() {
                                 <Building2 size={20} />
                               </div>
                               <div>
-                                <p className="font-semibold text-slate-900">{expense.company}</p>
+                                <div className="flex items-center gap-2">
+                                  <p className="font-semibold text-slate-900">{expense.company}</p>
+                                  {expense.recurrence && expense.recurrence !== 'none' && (
+                                    <span className="px-1.5 py-0.5 bg-indigo-100 text-indigo-600 text-[8px] font-bold rounded uppercase tracking-wider flex items-center gap-1">
+                                      <Clock size={8} />
+                                      {expense.recurrence}
+                                    </span>
+                                  )}
+                                </div>
                                 <p className="text-xs text-slate-500 font-mono uppercase tracking-tight">{expense.category}</p>
                               </div>
                             </div>
@@ -1089,6 +1281,27 @@ export default function App() {
                       Esta é uma assinatura mensal recorrente
                     </label>
                   </div>
+                  
+                  {formData.isSubscription && (
+                    <div className="space-y-1.5 p-3 md:p-4 bg-slate-50 rounded-2xl border border-slate-200">
+                      <label className="text-xs font-semibold text-slate-700">Frequência de Recorrência</label>
+                      <select 
+                        className="w-full px-4 py-2 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500 outline-none text-sm"
+                        value={formData.recurrence || 'none'}
+                        onChange={e => setFormData({...formData, recurrence: e.target.value as any})}
+                      >
+                        <option value="none">Sem recorrência automática</option>
+                        <option value="diario">Diário</option>
+                        <option value="semanal">Semanal</option>
+                        <option value="mensal">Mensal</option>
+                        <option value="anual">Anual</option>
+                      </select>
+                      <p className="text-[10px] text-slate-500 mt-1">
+                        Ao marcar como pago, uma nova conta será gerada automaticamente para o próximo período.
+                      </p>
+                    </div>
+                  )}
+
                   {formData.isSubscription && (
                     <motion.div 
                       initial={{ opacity: 0, x: -10 }}
